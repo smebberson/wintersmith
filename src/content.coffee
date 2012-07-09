@@ -94,7 +94,7 @@ ContentTree = (filename) ->
   Object.defineProperty @, 'filename',
     get: -> filename
   Object.defineProperty @, 'index',
-    get: -> @['index.md'] or @['index.markdown']
+    get: -> @['index.md'] or @['index.markdown'] or @['index.jade']
 
 ContentTree.fromDirectory = (directory, base, callback) ->
   if !callback?
