@@ -8,7 +8,7 @@ colors = require 'colors'
 mime = require 'mime'
 
 {logger, extend, stripExtension} = require './common'
-{loadTemplates, ContentTree} = require './'
+{loadTemplates, loadPlugins, ContentTree} = require './'
 
 colorCode = (code) ->
   s = code.toString()
@@ -23,6 +23,11 @@ colorCode = (code) ->
       return s
 
 setup = (options, callback) ->
+  ### returns a wintersmith http middleware ###
+
+  # options passed to ContentTree.fromDirectory
+  contentOptions =
+    ignore: options.ignore
 
   contentHandler = (request, response, callback) ->
     uri = url.parse(request.url).pathname
@@ -32,13 +37,13 @@ setup = (options, callback) ->
         # load contents and templates
         async.parallel
           templates: async.apply loadTemplates, options.templates
-          contents: async.apply ContentTree.fromDirectory, options.contents
+          contents: async.apply ContentTree.fromDirectory, options.contents, contentOptions
         , callback
       (result, callback) ->
         # render if uri matches
         {contents, templates} = result
         async.detect ContentTree.flatten(contents), (item, callback) ->
-          callback (uri is item.url)
+          callback (uri is item.url or (item.url[item.url.length - 1] is '/' and uri is (item.url + 'index.html')))
         , (result) ->
           if result
             result.render options.locals, contents, templates, (error, res) ->
@@ -79,10 +84,17 @@ setup = (options, callback) ->
 
 run = (options) ->
   http = require 'http'
-  server = http.createServer setup options
-  server.listen options.port
-  serverUrl = "http://#{ options.domain }:#{ options.port }/".bold
-  logger.info "server running on: #{ serverUrl }"
+  logger.verbose 'setting up server'
+  async.waterfall [
+    async.apply loadPlugins, options.plugins
+  ], (error) ->
+    if error
+      logger.error error.message, error
+    else
+      server = http.createServer setup options
+      server.listen options.port
+      serverUrl = "http://#{ options.domain }:#{ options.port }/".bold
+      logger.info "server running on: #{ serverUrl }"
 
 module.exports = setup
 module.exports.run = run

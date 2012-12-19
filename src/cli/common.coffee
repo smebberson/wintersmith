@@ -1,7 +1,10 @@
 
+fs = require 'fs'
 path = require 'path'
 async = require 'async'
 {logger, readJSON} = require '../common'
+
+exports.fileExists = fileExists = fs.exists or path.exists
 
 exports.commonOptions = defaults =
   config:
@@ -25,6 +28,9 @@ exports.commonOptions = defaults =
   plugins:
     alias: 'P'
     default: []
+  ignore:
+    alias: 'I'
+    default: []
 
 exports.commonUsage = [
   "-C, --chdir [path]            change the working directory"
@@ -34,6 +40,7 @@ exports.commonUsage = [
   "  -L, --locals [path]           optional path to json file containing template context data"
   "  -R, --require                 comma separated list of modules to add to the template context"
   "  -P, --plugins                 comma separated list of modules to load as plugins"
+  "  -I, --ignore                  comma separated list of files/glob-patterns to ignore"
 ].join '\n'
 
 exports.getOptions = (argv, callback) ->
@@ -53,7 +60,7 @@ exports.getOptions = (argv, callback) ->
     (callback) ->
       # load config if present
       configPath = path.join workDir, argv.config
-      path.exists configPath, (exists) ->
+      fileExists configPath, (exists) ->
         if exists
           logger.info "using config file: #{ configPath }"
           readJSON configPath, callback
@@ -104,9 +111,10 @@ exports.getOptions = (argv, callback) ->
     (options, callback) ->
       # load modules and add them to options.locals
       async.forEach options.require, (moduleName, callback) ->
-        logger.verbose "loading module #{ moduleName }"
+        moduleAlias = moduleName.split('/')[-1..]
+        logger.verbose "loading module #{ moduleName } available in locals as: #{ moduleAlias }"
         try
-          options.locals[moduleName] = require moduleName
+          options.locals[moduleAlias] = require moduleName
           callback()
         catch error
           callback error
@@ -120,12 +128,19 @@ exports.getOptions = (argv, callback) ->
       async.map options.plugins, resolveModule, (error, result) ->
         options.plugins = result
         callback error, options
+
+    (options, callback) ->
+      # split list of files to ignore if needed
+      if typeof options.ignore is 'string'
+        options.ignore = options.ignore.split ','
+      callback null, options
+
     (options, callback) ->
       logger.verbose 'resolved options:', options
       logger.verbose 'validating paths'
       paths = ['contents', 'templates']
       async.forEach paths, (filepath, callback) ->
-        path.exists options[filepath], (exists) ->
+        fileExists options[filepath], (exists) ->
           if exists
             callback()
           else
@@ -133,15 +148,3 @@ exports.getOptions = (argv, callback) ->
       , (error) ->
         callback error, options
   ], callback
-
-exports.loadPlugins = (plugins, callback) ->
-  require 'coffee-script' # so that we can load .coffee files as plugins directly
-  wintersmith = require './../'
-  async.forEach plugins, (plugin, callback) ->
-    logger.verbose "loading plugin: #{ plugin }"
-    try
-      module = require plugin
-    catch error
-      return callback error
-    module wintersmith, callback
-  , callback

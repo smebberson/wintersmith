@@ -86,27 +86,67 @@ slugify = (s) ->
 # Class ContentTree
 # not using Class since we need a clean prototype
 ContentTree = (filename) ->
+  parent = null
   groups = {directories: []}
+
   for plugin in contentPlugins
     groups[plugin.treeName] = []
-  Object.defineProperty @, '_',
-    get: -> groups
-  Object.defineProperty @, 'filename',
-    get: -> filename
-  Object.defineProperty @, 'index',
-    get: -> @['index.md'] or @['index.markdown'] or @['index.jade']
 
-ContentTree.fromDirectory = (directory, base, callback) ->
-  if !callback?
-    callback = base
-    base = directory
+  Object.defineProperty this, '_',
+    get: -> groups
+
+  Object.defineProperty this, 'filename',
+    get: -> filename
+
+  Object.defineProperty this, 'index',
+    get: ->
+      for key, item of this
+        if key[0...5] is 'index' then return item
+
+  Object.defineProperty this, 'parent',
+    get: -> parent
+    set: (val) -> parent = val
+
+ContentTree.fromDirectory = (directory, args..., callback) ->
+  ### recursively scan a *directory* and build a ContentTree
+      *args...* are *base* and *options* ###
+
+  # *base* and *options* are optional and can be passed in arbitrary order
+  for arg in args
+    switch typeof arg
+      when 'string'
+        base = arg
+      when 'object'
+        options = arg
+  base ?= directory
+  options ?= {}
 
   # create the base tree from *directory*
   tree = new ContentTree path.relative(base, directory)
 
+  # options passed to minimatch for ignore and plugin matching
+  minimatchOptions =
+    dot: false
+
   async.waterfall [
     # read directory
     async.apply fs.readdir, directory
+    (filenames, callback) ->
+      if options.ignore?
+        # exclude files matching ignore patterns
+        async.filter filenames, (filename, callback) ->
+          filename = path.join directory, filename
+          relname = path.relative base, filename
+          include = true
+          for pattern in options.ignore
+            if minimatch relname, pattern, minimatchOptions
+              logger.verbose "ignoring #{ relname } (matches: #{ pattern })"
+              include = false
+              break
+          callback include
+        , (result) -> callback null, result
+      else
+        callback null, filenames
     (filenames, callback) ->
       async.forEach filenames, (filename, callback) ->
         filename = path.join directory, filename
@@ -115,22 +155,26 @@ ContentTree.fromDirectory = (directory, base, callback) ->
           (stats, callback) ->
             if stats.isDirectory()
               # recursively map directories to content tree instances
-              ContentTree.fromDirectory filename, base, (error, result) ->
+              ContentTree.fromDirectory filename, base, options, (error, result) ->
+                result.parent = tree
                 tree[path.relative(directory, filename)] = result
                 tree._.directories.push result
                 callback error
+
             else if stats.isFile()
               # map any files found to content plugins
               basename = path.basename filename
               relname = path.relative base, filename
+
               # iterate backwards over all content plugins
               # and check if any plugin can handle this file
               match = false
               for i in [contentPlugins.length - 1..0] by -1
                 plugin = contentPlugins[i]
-                if minimatch relname, plugin.pattern, {dot: false} # TODO: dotfile plugin
+                if minimatch relname, plugin.pattern, minimatchOptions # TODO: dotfile plugin
                   plugin.class.fromFile relname, base, (error, instance) ->
                     if not error
+                      instance.parent = tree
                       tree[basename] = instance
                       tree._[plugin.treeName].push instance
                     callback error
